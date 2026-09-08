@@ -1,16 +1,38 @@
 'use client';
 
 import React, { useState } from 'react';
+import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleGoogleLogin = () => {
+    signIn('google', { callbackUrl: '/dashboard' });
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    router.push('/');
+    setError('');
+    setLoading(true);
+
+    const result = await signIn('credentials', {
+      email,
+      password,
+      redirect: false,
+    });
+
+    setLoading(false);
+
+    if (result?.error) {
+      setError('Invalid email or password. Please try again.');
+    } else {
+      router.push('/dashboard');
+    }
   };
 
   return (
@@ -21,7 +43,7 @@ export default function LoginPage() {
         {/* Google Login */}
         <button
           type="button"
-          onClick={() => router.push('/')}
+          onClick={handleGoogleLogin}
           className="w-full flex items-center justify-center gap-3 py-3 bg-brand-light rounded-lg text-sm font-medium text-text-primary hover:opacity-90 transition-all mb-6"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
@@ -34,7 +56,12 @@ export default function LoginPage() {
         </button>
 
         {/* Divider */}
-        <div className="divider-or mb-6">or sign up through email</div>
+        <div className="divider-or mb-6">or sign in with email</div>
+
+        {/* Error message */}
+        {error && (
+          <p className="text-red-500 text-sm text-center mb-4">{error}</p>
+        )}
 
         {/* Email Login Form */}
         <form onSubmit={handleLogin} className="space-y-4">
@@ -44,6 +71,7 @@ export default function LoginPage() {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="Email ID"
             className="input-field"
+            required
           />
           <input
             type="password"
@@ -51,9 +79,14 @@ export default function LoginPage() {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
             className="input-field"
+            required
           />
-          <button type="submit" className="btn-primary w-full">
-            Login
+          <button
+            type="submit"
+            disabled={loading}
+            className="btn-primary w-full disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Signing in…' : 'Login'}
           </button>
         </form>
       </div>

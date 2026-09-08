@@ -10,8 +10,12 @@ import {
   slackCallbackHandler,
   slackStatusHandler,
 } from '../controllers/slack.controller.js';
+import { upsertUserHandler } from '../controllers/auth.controller.js';
 
 const router = Router();
+
+// Auth Endpoints
+router.post('/auth/upsert', upsertUserHandler);
 
 // Email Endpoints
 router.post('/emails/schedule', scheduleEmailHandler);

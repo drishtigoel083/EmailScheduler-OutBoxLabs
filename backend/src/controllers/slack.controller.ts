@@ -3,9 +3,28 @@ import { getSlackAuthUrl, exchangeSlackCodeForToken } from '../services/slack.se
 import { prisma } from '../db/prisma.js';
 
 export async function slackConnectHandler(req: Request, res: Response) {
-  const userId = (req.query.userId as string) || 'default-user-id';
-  const url = getSlackAuthUrl(userId);
-  return res.redirect(url);
+  try {
+    const email = req.query.email as string;
+
+    if (!email) {
+      return res.status(400).send('Missing email');
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      return res.status(404).send('User not found');
+    }
+
+    const url = getSlackAuthUrl(user.id);
+
+    return res.redirect(url);
+  } catch (error: any) {
+    console.error('Slack connect error:', error);
+    return res.status(500).send(`Failed to connect Slack: ${error.message}`);
+  }
 }
 
 export async function slackCallbackHandler(req: Request, res: Response) {
@@ -18,7 +37,7 @@ export async function slackCallbackHandler(req: Request, res: Response) {
     }
 
     const tokenRecord = await exchangeSlackCodeForToken(code, stateUserId);
-    
+
     // Redirect back to frontend dashboard with success query param
     return res.send(`
       <html>

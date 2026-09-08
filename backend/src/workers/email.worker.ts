@@ -14,7 +14,7 @@ export function startEmailWorker() {
       const { emailId } = job.data;
       console.log(`⚙️  [Worker] Processing Job ID: ${job.id} for Email ID: ${emailId}`);
 
-      // 1. Fetch Email from DB (Source of Truth)
+      // 1. Fetch Email from DB
       const email = await prisma.email.findUnique({
         where: { id: emailId },
       });
@@ -89,7 +89,7 @@ export function startEmailWorker() {
 
         console.log(`✅ [Worker] Email ID ${emailId} successfully SENT to ${email.recipient}! MessageId: ${result.messageId}`);
 
-        // Index in Elasticsearch (Async, non-blocking)
+        // Index in Elasticsearch
         try {
           await indexEmailDocument(updatedEmail);
         } catch (esErr: any) {
@@ -113,6 +113,13 @@ export function startEmailWorker() {
     {
       connection: redisConnection,
       concurrency: config.scheduling.workerConcurrency,
+      // Enforces a minimum delay between individual email sends across the whole worker,
+      // mimicking real SMTP provider throttling. Configurable via MIN_DELAY_MS_BETWEEN_SENDS.
+      // BullMQ guarantees at most 1 job completes per `duration` ms, regardless of concurrency.
+      limiter: {
+        max: 1,
+        duration: config.scheduling.minDelayMsBetweenSends,
+      },
     }
   );
 
@@ -124,6 +131,8 @@ export function startEmailWorker() {
     console.error(`💥 [Worker] Job ${job?.id} failed with error: ${err.message}`);
   });
 
-  console.log(`🚀 [Worker] Email Worker started with concurrency = ${config.scheduling.workerConcurrency}`);
+  console.log(
+    `🚀 [Worker] Email Worker started with concurrency = ${config.scheduling.workerConcurrency}, min delay between sends = ${config.scheduling.minDelayMsBetweenSends}ms`
+  );
   return worker;
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { Clock, Send, AlertTriangle, ChevronDown, Slack, CheckCircle2, ExternalLink } from 'lucide-react';
+import { Clock, Send, AlertTriangle, LogOut, Slack, CheckCircle2, ExternalLink } from 'lucide-react';
+import { signOut } from 'next-auth/react';
 import { UserProfile } from '../types';
 
 interface SidebarProps {
@@ -52,7 +53,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="text-sm font-semibold text-text-primary truncate">{user.name}</div>
             <div className="text-xs text-text-secondary truncate">{user.email}</div>
           </div>
-          <ChevronDown className="w-4 h-4 text-text-secondary shrink-0" />
+          <button
+            onClick={() => signOut({ callbackUrl: '/login' })}
+            title="Sign out"
+            className="p-1 text-text-secondary hover:text-red-500 transition-colors shrink-0"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 

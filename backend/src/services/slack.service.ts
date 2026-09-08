@@ -81,6 +81,7 @@ export async function sendSlackRateLimitAlert(
 
 export function getSlackAuthUrl(state: string): string {
   const scopes = 'chat:write,commands,channels:read';
+  console.log('Slack Client ID loaded:', config.slack.clientId);
   return `https://slack.com/oauth/v2/authorize?client_id=${config.slack.clientId}&scope=${encodeURIComponent(
     scopes
   )}&redirect_uri=${encodeURIComponent(config.slack.redirectUri)}&state=${state}`;
