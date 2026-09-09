@@ -1,102 +1,229 @@
-# 🚀 Production-Grade Email Job Scheduler & Dashboard
+# 📧 Email Job Scheduler — ReachInbox Assignment
 
-A scalable, reliable, restart-safe distributed email job scheduling service + Next.js dashboard built with **TypeScript**, **Express**, **BullMQ**, **Redis**, **PostgreSQL**, **Elasticsearch**, **Ethereal Email**, and **Tailwind CSS**.
-
----
-
-## 🌟 Key Features & Ground Rules Compliance
-
-- [x] **Strictly NO Cron**: Powered entirely by BullMQ delayed jobs (`delay` parameter). Zero reliance on `node-cron`, `agenda`, or OS cron jobs.
-- [x] **PostgreSQL DB as Source of Truth**: BullMQ job payload contains ONLY `{ emailId: string }`. Recipient data, subject, status, and retry state live in Postgres.
-- [x] **Restart-Safe & Boot Reconciliation**: Recovers gracefully from server restarts or Redis flushes. On boot, all `SCHEDULED` emails in Postgres missing from BullMQ are re-enqueued automatically.
-- [x] **Atomic Redis Rate Limiting**: Fixed/sliding hourly rate limits per sender using atomic Redis Lua scripts (`INCR` + `EXPIRE`). Jobs exceeding the rate limit are **rescheduled into the next hour window (never dropped or lost)**.
-- [x] **Real Slack OAuth Integration**: Connect flow stores access tokens per user and posts real `chat.postMessage` alerts to Slack the exact moment an hourly limit is hit.
-- [x] **Ethereal Email Integration**: Real fake-SMTP transport with automatic test account generation and clickable preview URLs logged for verification.
-- [x] **Elasticsearch Indexing**: Automatic index creation and document indexing with search over subject, recipient, body, and status (with graceful Postgres fallback).
-- [x] **Live BullMQ Queue Dashboard**: Embedded Bull Board UI hosted at `/admin/queues`.
-- [x] **Next.js + Tailwind Dashboard**: Scheduled / Sent / Rate Limited tabs, live polling, instant search bar, single & CSV lead batch campaign compose modal.
+A production-style email scheduling service: schedule emails via API or dashboard, backed by
+BullMQ + Redis (no cron), with Postgres persistence, Elasticsearch search, Slack alerts, and
+real Google OAuth login.
 
 ---
 
-## 🏗️ Technical Architecture & Trade-Offs
+## 🧱 Tech Stack
 
-### 1. Scheduling Loop (BullMQ + Postgres)
-```
-           ┌──────────────────────────────────────────────┐
-           │ POST /api/emails/schedule                   │
-           └──────────────────────┬───────────────────────┘
-                                  │
-                   ┌──────────────┴──────────────┐
-                   │ Write Email Row to Postgres │ (status = 'SCHEDULED')
-                   └──────────────┬──────────────┘
-                                  │
-                   ┌──────────────┴──────────────┐
-                   │ Enqueue Delayed Job to      │ payload: { emailId }
-                   │ BullMQ Queue                │ delay = max(0, targetTime - now)
-                   └──────────────┬──────────────┘
-                                  │
-                   ┌──────────────┴──────────────┐
-                   │ Update bullmqJobId in DB    │
-                   └─────────────────────────────┘
-```
-
-### 2. Idempotent Worker Processing
-When a BullMQ worker picks up a job:
-1. Fetches DB row by `emailId`.
-2. **Idempotency Check**: If `status === 'SENT'` or `status === 'FAILED'`, skips cleanly.
-3. Updates status to `PROCESSING`.
-4. **Rate Limit Check**: Atomically increments Redis sender counter. If limit hit, updates status to `RESCHEDULED`, fires Slack alert, and enqueues delayed job for next hour window.
-5. **SMTP Delivery**: Sends via Ethereal Email. Updates status to `SENT` with `sentAt = now()`.
-
-### 3. Restart Safety & Boot Reconciliation
-* **Trade-Off**: Relying on Redis persistence (AOF) alone leaves a 1-second data loss window during hard crashes (`kill -9`).
-* **Our Solution**: On boot, `reconcileJobsOnBoot()` scans PostgreSQL for `SCHEDULED` emails, checks `queue.getJob()`, and re-enqueues missing jobs into BullMQ. If `scheduledAt` passed while the server was down, `delay = 0` fires the job immediately.
+| Layer | Tech |
+|---|---|
+| Backend | TypeScript, Express.js, BullMQ, Redis, Prisma ORM |
+| Database | PostgreSQL |
+| Search | Elasticsearch |
+| Email | Ethereal (fake SMTP for testing) |
+| Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
+| Auth | NextAuth.js (Google OAuth) |
+| Notifications | Slack OAuth 2.0 + `chat.postMessage` |
+| Infra | Docker Compose (Redis, Postgres, Elasticsearch) |
 
 ---
 
-## 🛠️ Quick Start & Setup
+## 🚀 Quick Start
 
-### Prerequisites
-- Node.js (v18+)
-- Docker & Docker Compose
+### 1. Start infrastructure
 
-### 1. Start Infrastructure Services (Redis, Postgres, Elasticsearch)
 ```bash
 docker compose up -d
 ```
+Starts Redis, Postgres, and Elasticsearch. Confirm all three are healthy:
+```bash
+docker compose ps
+```
 
-### 2. Backend Setup
+### 2. Backend setup
+
 ```bash
 cd backend
 npm install
-npm run prisma:db:push # Push PostgreSQL schema
+cp .env.example .env   # fill in real values — see table below
+npx prisma migrate dev
 npm run dev
 ```
-* Backend API: `http://localhost:4000/api`
-* Bull Board Live Dashboard: `http://localhost:4000/admin/queues`
+Runs on `http://localhost:4000`. Bull Board (live queue dashboard): `http://localhost:4000/admin/queues`
 
-### 3. Frontend Setup
+### 3. Frontend setup
+
 ```bash
 cd frontend
 npm install
+cp .env.example .env.local   # fill in real values — see table below
 npm run dev
 ```
-* Dashboard URL: `http://localhost:3000`
+Runs on `http://localhost:3000`
 
 ---
 
-## 🧪 Manual Restart Test Script
+## 🔑 Environment Variables
 
-To verify that future jobs survive server termination and resume without duplicating:
+### Backend (`backend/.env`)
 
-1. **Schedule a Delayed Job (30 Seconds in Future)**:
-   ```powershell
-   Invoke-RestMethod -Uri "http://localhost:4000/api/emails/schedule" -Method Post -ContentType "application/json" -Body '{"sender":"alice@company.com","recipient":"bob@lead.com","subject":"Restart Test","body":"Checking restart safety","delayMs":30000}'
-   ```
+| Variable | Purpose | Example |
+|---|---|---|
+| `DATABASE_URL` | Postgres connection string | `postgresql://postgres:postgres@localhost:5432/email_scheduler` |
+| `REDIS_URL` | Redis connection string | `redis://localhost:6379` |
+| `ELASTICSEARCH_NODE` | Elasticsearch URL | `http://localhost:9200` |
+| `WORKER_CONCURRENCY` | Parallel jobs per worker | `5` |
+| `MIN_DELAY_MS_BETWEEN_SENDS` | Floor delay between sends | `1000` |
+| `MAX_EMAILS_PER_HOUR_PER_SENDER` | Per-sender hourly cap | `50` |
+| `MAX_EMAILS_PER_HOUR_GLOBAL` | Optional global cap | `200` (or leave blank to disable) |
+| `ETHEREAL_EMAIL` / `ETHEREAL_PASSWORD` | Fake SMTP creds | Get from [ethereal.email](https://ethereal.email) → "Create Ethereal Account" |
+| `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Real Slack app creds | From [api.slack.com/apps](https://api.slack.com/apps) |
+| `SLACK_REDIRECT_URI` | OAuth callback | `http://localhost:4000/api/slack/callback` |
 
-2. **Kill the Backend Server immediately** (`Ctrl + C` or process kill).
-3. Observe that the email remains in Postgres with status `SCHEDULED`.
-4. **Restart the Backend Server** (`npm run dev`).
-5. Observe the boot log:
-   `⚠️ [Reconciliation] Email ID ... missing in Redis. Re-enqueueing with delay...`
-6. Wait for the remaining seconds: observe worker picks up job, sends email via Ethereal, and marks DB status `SENT` cleanly!
+### Frontend (`frontend/.env.local`)
+
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_API_URL` | Backend base URL (`http://localhost:4000/api`) |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Real Google OAuth creds (Google Cloud Console) |
+| `NEXTAUTH_SECRET` | Any random string |
+| `NEXTAUTH_URL` | `http://localhost:3000` |
+
+### Setting up Ethereal Email
+
+1. Go to [ethereal.email](https://ethereal.email)
+2. Click **"Create Ethereal Account"** (instant, no signup)
+3. Copy the generated email + password into `ETHEREAL_EMAIL` / `ETHEREAL_PASSWORD`
+4. Sent emails can be viewed via the preview URL printed in backend logs on each send
+
+---
+
+## 🏗️ Architecture Overview
+
+### Scheduling flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant API as Express API
+    participant DB as Postgres
+    participant Queue as BullMQ (Redis)
+    participant Worker
+    participant SMTP as Ethereal
+
+    User->>API: POST /emails/schedule
+    API->>DB: Insert Email row (status=SCHEDULED)
+    API->>Queue: Add delayed job (by Email ID)
+    Queue-->>Worker: Job fires at scheduled time
+    Worker->>DB: Fetch Email by ID
+    Worker->>Worker: Idempotency check (skip if already SENT)
+    Worker->>SMTP: Send email
+    Worker->>DB: Update status=SENT, sentAt=now
+```
+
+**Key design choice:** BullMQ jobs only carry the Email's ID — Postgres stays the single source
+of truth for all email data and status.
+
+### Restart persistence
+
+```mermaid
+flowchart TD
+    A[Backend starts] --> B[Query DB for status=SCHEDULED]
+    B --> C{Job still in BullMQ/Redis?}
+    C -->|Yes| D[Do nothing — Redis persistence already covers it]
+    C -->|No| E[Re-enqueue job with correct remaining delay]
+    D --> F[Worker resumes normally]
+    E --> F
+```
+
+Two independent layers protect against lost jobs on restart:
+- **Redis's own persistence** keeps BullMQ jobs alive across a backend restart
+- **Boot-time reconciliation** (above) is the fallback — Postgres is authoritative, so even if
+  Redis ever lost a job, it gets rebuilt from the DB automatically
+
+### Rate limiting & concurrency
+
+```mermaid
+flowchart LR
+    A[Worker picks up job] --> B{Under hourly limit?}
+    B -->|Yes, Redis atomic INCR| C[Send email]
+    B -->|No, limit hit| D[Move job to DELAYED<br/>next hour + stagger offset]
+    D --> E[Fire Slack alert<br/>if connected]
+    E --> F[Job resurfaces next hour,<br/>re-checked automatically]
+```
+
+| Mechanism | Implementation |
+|---|---|
+| Worker concurrency | Configurable via `WORKER_CONCURRENCY`, passed to BullMQ `Worker` |
+| Min delay between sends | BullMQ `limiter: { max: 1, duration: MIN_DELAY_MS_BETWEEN_SENDS }` |
+| Hourly rate limit | Redis Lua script — atomic `INCR` + conditional `EXPIRE`, keyed by `userId:sender:hourWindow` |
+| Multi-worker safety | Atomic Redis ops (not in-memory counters) — safe under concurrency or multiple instances |
+| On limit hit | Job moved to `DELAYED` (not dropped/failed) via `job.moveToDelayed()`, re-checked at the next hour boundary |
+| Order preservation | Each rejected job gets a sequence number; delay = `timeToNextHour + (sequence-1) × minDelay`, staggering retries |
+| Slack alert | Real OAuth token → live `chat.postMessage` call the moment a limit is hit; deduped to one alert per user/sender/hour |
+
+**Trade-off:** rate-limit windows are aligned to the clock hour (resets at `:00`), not a rolling
+60-minute window from each send. This is a deliberate, standard pattern (same approach many
+public APIs use) — it means a limit hit early in the hour waits longer than one hit late in the
+hour.
+
+**Trade-off:** if Redis is temporarily unreachable, the rate limiter fails **open** (allows the
+send) rather than blocking all traffic — prioritizing availability over strict enforcement in
+that edge case.
+
+---
+
+## ✅ Features Implemented
+
+### Backend
+
+| Feature | Status |
+|---|---|
+| Schedule email via API | ✅ |
+| BullMQ delayed jobs (no cron) | ✅ |
+| Ethereal SMTP sending | ✅ |
+| Restart-safe persistence (reconciliation) | ✅ |
+| Idempotency (no duplicate sends) | ✅ |
+| Configurable worker concurrency | ✅ |
+| Configurable min delay between sends | ✅ |
+| Per-sender hourly rate limit | ✅ |
+| Optional global hourly rate limit | ✅ |
+| Redis-backed atomic counters (multi-worker safe) | ✅ |
+| Reschedule (not drop) on rate limit | ✅ |
+| Real Slack OAuth + live alert on rate limit | ✅ |
+| Slack disconnect/reconnect handling | ✅ |
+| Elasticsearch indexing | ✅ |
+| Elasticsearch search endpoint | ✅ |
+| Live BullMQ dashboard (Bull Board) | ✅ |
+| Behavior under 1000+ simultaneous jobs | ✅ (enqueue path load-tested) |
+
+### Frontend
+
+| Feature | Status |
+|---|---|
+| Real Google OAuth login (NextAuth) | ✅ |
+| Header shows name/email/avatar | ✅ |
+| Logout | ✅ |
+| Dashboard: Scheduled / Sent tabs | ✅ |
+| Compose modal: subject, body, recipients | ✅ |
+| CSV upload + lead parsing (Papaparse) | ✅ |
+| Per-batch delay + start time controls | ✅ |
+| Connect Slack button (real OAuth) | ✅ |
+| Loading + empty states | ✅ |
+| Search/filter emails | ✅ |
+
+---
+
+## 📝 Assumptions, Shortcuts & Trade-offs
+
+- Rate-limit windows are calendar-hour-aligned, not rolling — see Architecture section above.
+- Redis connection failures fail-open on rate limiting (availability over strict enforcement).
+- A `User` row is created/matched by email at schedule time; full profile sync from Google login
+  happens on first schedule or Slack connect, not immediately at login.
+- Elasticsearch indexing is fire-and-forget (non-blocking) — a failed index doesn't fail the
+  schedule request, it's logged and retried on the next status update.
+- 1000+ concurrent job behavior was verified via the enqueue path (DB + Redis writes), not by
+  actually sending 1000 real emails through Ethereal, per the assignment's guidance.
+
+---
+
+## 🎥 Demo Video
+
+[Link to demo video] — covers:
+1. Scheduling emails (frontend + Postman)
+2. Dashboard: Scheduled and Sent tabs
+3. Restart scenario: stop → restart → future email still sends correctly
+4. Rate limiting + Slack alert live demo
