@@ -1,6 +1,5 @@
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
-import RedisMock from 'ioredis-mock';
 import { config } from '../config/index.js';
 
 export interface EmailJobData {
@@ -9,38 +8,41 @@ export interface EmailJobData {
 
 export const QUEUE_NAME = 'email-queue';
 
-let connectionInstance: any;
+// Create ONE persistent Redis connection for BullMQ
+export const redisConnection = new Redis(config.redis.url, {
+  maxRetriesPerRequest: null,
+  enableReadyCheck: false,
 
-try {
-  connectionInstance = new Redis(config.redis.url, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-    lazyConnect: true,
-    retryStrategy(times) {
-      if (times > 2) {
-        console.warn('⚠️ [Redis] Could not connect to standalone Redis/Docker. Falling back to in-memory Redis instance...');
-        return null; // Stop retrying Redis
-      }
-      return 500;
-    },
-  });
+  retryStrategy(times) {
+    return Math.min(times * 1000, 5000);
+  },
+});
 
-  connectionInstance.on('error', (err: any) => {
-    // Suppress connection spam
-  });
-} catch (e) {
-  console.warn('⚠️ [Redis] Using in-memory Redis mock.');
-  connectionInstance = new RedisMock();
-}
+redisConnection.on('connect', () => {
+  console.log('✅ [Redis] Connected');
+});
 
-export const redisConnection = connectionInstance;
+redisConnection.on('ready', () => {
+  console.log('✅ [Redis] Ready');
+});
+
+redisConnection.on('error', (err) => {
+  console.error('❌ [Redis] Error:', err.message);
+});
+
+redisConnection.on('close', () => {
+  console.warn('⚠️ [Redis] Connection closed');
+});
 
 export const emailQueue = new Queue<EmailJobData>(QUEUE_NAME, {
   connection: redisConnection,
+
   defaultJobOptions: {
     removeOnComplete: 100,
     removeOnFail: 500,
+
     attempts: 3,
+
     backoff: {
       type: 'exponential',
       delay: 5000,
@@ -56,8 +58,9 @@ export async function enqueueEmailJob(
   delayMs: number,
   overrideJobId?: string
 ): Promise<string> {
-  const jobId = overrideJobId || `email-${emailId}-${Date.now()}`;
-  
+  const jobId =
+    overrideJobId || `email-${emailId}-${Date.now()}`;
+
   const job = await emailQueue.add(
     'send-email',
     { emailId },

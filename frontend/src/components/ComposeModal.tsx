@@ -409,10 +409,10 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
               />
             </div>
 
-            <p className="text-xs text-text-muted">
+            {/* <p className="text-xs text-text-muted">
               Press Enter or comma after each email to add multiple
               recipients
-            </p>
+            </p> */}
           </div>
 
           <div>
