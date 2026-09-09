@@ -6,7 +6,8 @@ export async function sendSlackRateLimitAlert(
   userId: string,
   sender: string,
   currentCount: number,
-  maxLimit: number
+  maxLimit: number,
+  limitType: 'sender' | 'global' = 'sender'
 ): Promise<boolean> {
   try {
     const slackToken = await prisma.slackToken.findUnique({
@@ -24,9 +25,14 @@ export async function sendSlackRateLimitAlert(
       return false;
     }
 
+    const limitScope =
+      limitType === 'global'
+        ? 'Global hourly limit (all senders combined)'
+        : `Per-sender limit for \`${sender}\``;
+
     const messagePayload = {
       channel,
-      text: `🚨 *Rate Limit Exceeded Alert*`,
+      text: `🚨 Rate Limit Exceeded — ${sender}`,
       blocks: [
         {
           type: 'header',
@@ -47,13 +53,20 @@ export async function sendSlackRateLimitAlert(
               type: 'mrkdwn',
               text: `*Usage:*\n\`${currentCount} / ${maxLimit}\` emails/hr`,
             },
+            {
+              type: 'mrkdwn',
+              text: `*Limit type:*\n${limitScope}`,
+            },
           ],
         },
         {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `⚠️ Additional outgoing emails for \`${sender}\` are automatically rescheduled to the next hour window. Zero emails dropped.`,
+            text:
+              limitType === 'global'
+                ? '⚠️ The global hourly email cap was reached. Excess jobs are automatically staggered into the next hour window. Zero emails dropped.'
+                : `⚠️ Additional outgoing emails for \`${sender}\` are automatically staggered into the next hour window. Zero emails dropped.`,
           },
         },
       ],
@@ -79,9 +92,19 @@ export async function sendSlackRateLimitAlert(
   }
 }
 
+export async function disconnectSlack(userId: string): Promise<boolean> {
+  try {
+    await prisma.slackToken.deleteMany({ where: { userId } });
+    return true;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('❌ [Slack] Failed to disconnect:', message);
+    return false;
+  }
+}
+
 export function getSlackAuthUrl(state: string): string {
-  const scopes = 'chat:write,commands,channels:read';
-  console.log('Slack Client ID loaded:', config.slack.clientId);
+  const scopes = 'chat:write,im:write,channels:read';
   return `https://slack.com/oauth/v2/authorize?client_id=${config.slack.clientId}&scope=${encodeURIComponent(
     scopes
   )}&redirect_uri=${encodeURIComponent(config.slack.redirectUri)}&state=${state}`;

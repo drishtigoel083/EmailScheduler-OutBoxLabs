@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   ArrowLeft,
   Paperclip,
@@ -30,6 +30,7 @@ interface ComposeModalProps {
   onSuccess: () => void;
   apiUrl: string;
   userEmail: string;
+  userId?: string;
 }
 
 export const ComposeModal: React.FC<ComposeModalProps> = ({
@@ -38,12 +39,28 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
   onSuccess,
   apiUrl,
   userEmail,
+  userId,
 }) => {
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [scheduledAt, setScheduledAt] = useState('');
   const [delayMs, setDelayMs] = useState(1000);
   const [hourlyLimit, setHourlyLimit] = useState(50);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    axios
+      .get(`${apiUrl}/config`)
+      .then((res) => {
+        if (res.data?.maxEmailsPerHourPerSender) {
+          setHourlyLimit(res.data.maxEmailsPerHourPerSender);
+        }
+      })
+      .catch(() => {
+        // Keep default if config endpoint unavailable
+      });
+  }, [isOpen, apiUrl]);
 
   const [csvLeads, setCsvLeads] = useState<CSVLead[]>([]);
   const [manualRecipients, setManualRecipients] = useState<string[]>([]);
@@ -204,6 +221,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
           recipient: lead.email,
           subject,
           body: personalizedBody,
+          userId,
           scheduledAt: new Date(
             targetStartTime + currentDelayOffset
           ).toISOString(),
@@ -450,15 +468,14 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
 
           <div className="flex items-center gap-3">
             <span className="text-sm text-text-secondary">
-              Hourly Limit
+              Hourly Limit (server)
             </span>
-            <input
-              type="number"
-              min="1"
-              value={hourlyLimit}
-              onChange={(e) => setHourlyLimit(Number(e.target.value))}
-              className="w-16 px-2 py-1.5 bg-surface-input rounded-lg text-sm text-text-primary text-center focus:outline-none focus:ring-2 focus:ring-brand/20"
-            />
+            <span
+              className="w-16 px-2 py-1.5 bg-surface-input rounded-lg text-sm text-text-primary text-center"
+              title="Configured via MAX_EMAILS_PER_HOUR_PER_SENDER env var"
+            >
+              {hourlyLimit}
+            </span>
           </div>
         </div>
 

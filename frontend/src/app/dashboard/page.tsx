@@ -46,12 +46,23 @@ export default function DashboardPage() {
 
   // ── Fetch emails ───────────────────────────────────────────────────
   const fetchEmails = useCallback(async (showSpinner = true) => {
+    const email = session?.user?.email;
+
+    // Don't fire the request until we actually have a logged-in session.
+    // Backend requires userId or email — an unscoped call is intentionally rejected (400).
+    if (!email) {
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+
     if (showSpinner) setIsLoading(true);
     else setIsRefreshing(true);
 
     try {
-      const res = await axios.get(`${API_URL}/emails`);
-      // Handle wrapped responses: { data: [] }, { emails: [] }, or a plain array
+      const res = await axios.get(`${API_URL}/emails`, {
+        params: { email },
+      });
       const raw = res.data;
       const list: EmailItem[] = Array.isArray(raw)
         ? raw
@@ -67,22 +78,51 @@ export default function DashboardPage() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [session?.user?.email]);
+
+  const fetchSlackStatus = useCallback(async () => {
+    const dbUserId = (session?.user as { id?: string })?.id;
+    const email = session?.user?.email;
+    if (!dbUserId && !email) return;
+
+    try {
+      const params = dbUserId ? { userId: dbUserId } : { email };
+      const res = await axios.get(`${API_URL}/slack/status`, { params });
+      setSlackConnected(Boolean(res.data?.connected));
+    } catch (err) {
+      console.error('Failed to fetch Slack status:', err);
+    }
+  }, [session?.user]);
 
   useEffect(() => {
     if (status === 'authenticated') {
       fetchEmails();
+      fetchSlackStatus();
     }
+  }, [status, fetchEmails, fetchSlackStatus]);
+
+  // Live polling every 5 seconds
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+
+    const interval = setInterval(() => {
+      fetchEmails(false);
+    }, 5000);
+
+    return () => clearInterval(interval);
   }, [status, fetchEmails]);
 
   // ── Filtered emails by tab & search ───────────────────────────────
+  const isRateLimited = (e: EmailItem) =>
+    e.failReason?.toLowerCase().includes('rate limit') ?? false;
+
   const filtered = emails.filter((e) => {
     const matchesTab =
       activeTab === 'scheduled'
-        ? e.status === 'SCHEDULED' || e.status === 'PROCESSING'
+        ? (e.status === 'SCHEDULED' || e.status === 'PROCESSING') && !isRateLimited(e)
         : activeTab === 'sent'
           ? e.status === 'SENT' || e.status === 'FAILED'
-          : e.status === 'RESCHEDULED';
+          : isRateLimited(e) || e.status === 'RESCHEDULED';
 
     const q = searchQuery.toLowerCase();
     const matchesSearch =
@@ -96,27 +136,28 @@ export default function DashboardPage() {
 
   // ── Count by status ────────────────────────────────────────────────
   const scheduledCount = emails.filter(
-    (e) => e.status === 'SCHEDULED' || e.status === 'PROCESSING'
+    (e) => (e.status === 'SCHEDULED' || e.status === 'PROCESSING') && !isRateLimited(e)
   ).length;
   const sentCount = emails.filter(
     (e) => e.status === 'SENT' || e.status === 'FAILED'
   ).length;
-  const rescheduledCount = emails.filter((e) => e.status === 'RESCHEDULED').length;
+  const rescheduledCount = emails.filter(
+    (e) => isRateLimited(e) || e.status === 'RESCHEDULED'
+  ).length;
 
   // ── Slack connect ──────────────────────────────────────────────────
   const handleConnectSlack = () => {
     const email = session?.user?.email;
 
-    const url = email
-      ? `${API_URL}/slack/connect?email=${encodeURIComponent(email)}`
-      : `${API_URL}/slack/connect`;
+    if (!email) return;
 
+    const url = `${API_URL}/slack/connect?email=${encodeURIComponent(email)}`;
     window.open(url, '_blank', 'width=600,height=700');
 
-    // Listen for the popup's postMessage on success
     const onMessage = (e: MessageEvent) => {
       if (e.data === 'slack-connected') {
         setSlackConnected(true);
+        fetchSlackStatus();
         window.removeEventListener('message', onMessage);
       }
     };
@@ -193,6 +234,7 @@ export default function DashboardPage() {
         onSuccess={() => fetchEmails(false)}
         apiUrl={API_URL}
         userEmail={session?.user?.email ?? ''}
+        userId={(session?.user as { id?: string })?.id}
       />
 
       <EmailDetailModal

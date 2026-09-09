@@ -25,6 +25,91 @@ real Google OAuth login.
 
 ### 1. Start infrastructure
 
+<<<<<<< HEAD
+=======
+### 2. Idempotent Worker Processing
+When a BullMQ worker picks up a job:
+1. Fetches DB row by `emailId`.
+2. **Idempotency Check**: If `status === 'SENT'` or `status === 'FAILED'`, skips cleanly.
+3. Updates status to `PROCESSING`.
+4. **Rate Limit Check**: Atomically increments Redis sender counter. If limit hit, updates status to `RESCHEDULED`, fires Slack alert, and enqueues delayed job for next hour window.
+5. **SMTP Delivery**: Sends via Ethereal Email. Updates status to `SENT` with `sentAt = now()`.
+
+### 3. Restart Safety & Boot Reconciliation
+* **Trade-Off**: Relying on Redis persistence (AOF) alone leaves a 1-second data loss window during hard crashes (`kill -9`).
+* **Our Solution**: On boot, `reconcileJobsOnBoot()` scans PostgreSQL for `SCHEDULED` emails, checks `queue.getJob()`, and re-enqueues missing jobs into BullMQ. If `scheduledAt` passed while the server was down, `delay = 0` fires the job immediately.
+
+---
+
+## ⏱️ Rate Limiting (Redis-Backed, Multi-Worker Safe)
+
+### Configuration (Environment Variables)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_EMAILS_PER_HOUR_PER_SENDER` | `50` | Per-sender hourly cap. Each sender (email address) gets its own counter. |
+| `MAX_EMAILS_PER_HOUR` | — | Legacy alias; used only if `MAX_EMAILS_PER_HOUR_PER_SENDER` is unset. |
+| `MAX_EMAILS_PER_HOUR_GLOBAL` | *(disabled)* | Optional global cap across **all** senders combined. |
+| `MIN_DELAY_MS_BETWEEN_SENDS` | `1000` | Minimum gap between SMTP sends (BullMQ worker limiter). |
+| `WORKER_CONCURRENCY` | `5` | Parallel worker threads. |
+
+All limits are read from env at startup — **no hardcoded values in code**.
+
+### How It Works
+
+1. **Redis atomic counters** — When a worker picks up a job, it runs a Lua script (`INCR` + `EXPIRE`) on key `rate_limit:{sender}:{hourTimestamp}`. This is atomic and safe across multiple worker processes/instances.
+2. **Optional global counter** — If `MAX_EMAILS_PER_HOUR_GLOBAL` is set, a second key `rate_limit:__global__:{hourTimestamp}` is checked. If the global cap is hit, the per-sender increment is rolled back.
+3. **Fixed hourly windows** — Windows align to UTC epoch hours (`floor(now / 3600000) * 3600000`). Keys expire after 2 hours via Redis TTL.
+4. **Never drop jobs** — When a limit is hit, the job is **not failed or discarded**. Instead:
+   - DB status briefly set to `RESCHEDULED` with `failReason` explaining the delay
+   - A new BullMQ delayed job is enqueued for the **next hour window**
+   - Status returns to `SCHEDULED` with updated `scheduledAt`
+5. **Order preservation under load** — When 1000+ emails fire at the same instant and exceed the limit, blocked jobs receive a monotonic sequence number via Redis (`rate_limit_reschedule_seq:{sender}:{nextHour}`). Delay = `timeToNextHour + (sequence - 1) * MIN_DELAY_MS_BETWEEN_SENDS`, spreading jobs across the next hour in FIFO order.
+
+### Behavior Under Load (1000+ Emails at Once)
+
+```
+Hour 1 (limit = 50):
+  Jobs 1–50   → sent immediately (counter = 50)
+  Jobs 51–1000 → rate-limited, staggered into Hour 2
+
+Hour 2:
+  Job 51  → fires at T+0ms
+  Job 52  → fires at T+1000ms  (MIN_DELAY_MS_BETWEEN_SENDS)
+  Job 53  → fires at T+2000ms
+  ...
+  Job 100 → fires at T+49s
+  Jobs 101–1000 → rate-limited again, staggered into Hour 3
+  (continues until all sent — zero dropped)
+```
+
+### Trade-Offs
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Redis Lua counters (chosen)** | Atomic, fast, works across N workers | Requires Redis; fail-open if Redis down |
+| **BullMQ limiter alone** | Built-in | Only throttles throughput, not hourly caps |
+| **In-memory counters** | Simple | Breaks with multiple worker instances |
+| **DB row locks** | No Redis needed | Slower under high concurrency |
+
+### Slack Notification on Rate Limit Hit
+
+1. User clicks **Connect Slack** in the dashboard → OAuth v2 authorize flow → backend stores `accessToken` + `channelId` in `SlackToken` table per user.
+2. When a sender's hourly limit is reached, the worker calls Slack `chat.postMessage` with a formatted alert (sender, usage, limit type).
+3. **Alert deduplication** — At most **one Slack message per user + sender + hour window** (Redis key `slack_alert_sent:{userId}:{sender}:{hour}`).
+4. **Graceful no-op** — If Slack is not connected, the alert is silently skipped (no crash). Reconnecting via OAuth starts notifications immediately without redeploy.
+5. **Disconnect** — `DELETE /api/slack/disconnect?userId=...` removes stored tokens.
+
+---
+
+## 🛠️ Quick Start & Setup
+
+### Prerequisites
+- Node.js (v18+)
+- Docker & Docker Compose
+
+### 1. Start Infrastructure Services (Redis, Postgres, Elasticsearch)
+>>>>>>> 2edc268 (feat: add hourly email rate limiting with Slack alerts)
 ```bash
 docker compose up -d
 ```
@@ -73,6 +158,7 @@ Runs on `http://localhost:3000`
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Real Slack app creds | From [api.slack.com/apps](https://api.slack.com/apps) |
 | `SLACK_REDIRECT_URI` | OAuth callback | `http://localhost:4000/api/slack/callback` |
 
+<<<<<<< HEAD
 ### Frontend (`frontend/.env.local`)
 
 | Variable | Purpose |
@@ -227,3 +313,37 @@ that edge case.
 2. Dashboard: Scheduled and Sent tabs
 3. Restart scenario: stop → restart → future email still sends correctly
 4. Rate limiting + Slack alert live demo
+=======
+2. **Kill the Backend Server immediately** (`Ctrl + C` or process kill).
+3. Observe that the email remains in Postgres with status `SCHEDULED`.
+4. **Restart the Backend Server** (`npm run dev`).
+5. Observe the boot log:
+   `⚠️ [Reconciliation] Email ID ... missing in Redis. Re-enqueueing with delay...`
+6. Wait for the remaining seconds: observe worker picks up job, sends email via Ethereal, and marks DB status `SENT` cleanly!
+
+---
+
+## 🧪 Rate Limit & Slack Alert Test
+
+1. **Set a low limit** in `.env`:
+   ```
+   MAX_EMAILS_PER_HOUR_PER_SENDER=3
+   MIN_DELAY_MS_BETWEEN_SENDS=500
+   ```
+
+2. **Connect Slack** via the dashboard sidebar (requires `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` in `.env`).
+
+3. **Schedule 10 emails** for immediate delivery (via Compose or API):
+   ```powershell
+   1..10 | ForEach-Object {
+     Invoke-RestMethod -Uri "http://localhost:4000/api/emails/schedule" -Method Post -ContentType "application/json" -Body "{`"sender`":`"you@gmail.com`",`"recipient`":`"lead$_@test.com`",`"subject`":`"Rate test $_`",`"body`":`"Hello`",`"delayMs`":0}"
+   }
+   ```
+
+4. **Observe**:
+   - First 3 emails sent in the current hour window
+   - Remaining 7 appear in the **Rate Limited** tab with staggered `scheduledAt` times
+   - **One Slack alert** posted (deduplicated per hour window)
+   - Bull Board at `/admin/queues` shows delayed jobs for the next hour
+   - Zero jobs dropped or permanently failed
+>>>>>>> 2edc268 (feat: add hourly email rate limiting with Slack alerts)

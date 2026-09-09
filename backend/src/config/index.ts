@@ -5,10 +5,16 @@ import path from 'path';
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 dotenv.config();
 
+function parseOptionalInt(value: string | undefined): number | null {
+  if (value === undefined || value === '') return null;
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '4000', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
-  
+
   postgres: {
     url: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/email_scheduler?schema=public',
     host: process.env.POSTGRES_HOST || 'localhost',
@@ -29,7 +35,13 @@ export const config = {
   },
 
   scheduling: {
-    maxEmailsPerHour: parseInt(process.env.MAX_EMAILS_PER_HOUR || '50', 10),
+    // Per-sender hourly cap (primary limit). Falls back to MAX_EMAILS_PER_HOUR.
+    maxEmailsPerHourPerSender:
+      parseOptionalInt(process.env.MAX_EMAILS_PER_HOUR_PER_SENDER) ??
+      parseOptionalInt(process.env.MAX_EMAILS_PER_HOUR) ??
+      50,
+    // Optional global cap across all senders combined (null = disabled).
+    maxEmailsPerHourGlobal: parseOptionalInt(process.env.MAX_EMAILS_PER_HOUR_GLOBAL),
     minDelayMsBetweenSends: parseInt(process.env.MIN_DELAY_MS_BETWEEN_SENDS || '1000', 10),
     workerConcurrency: parseInt(process.env.WORKER_CONCURRENCY || '5', 10),
   },
@@ -51,5 +63,5 @@ export const config = {
     googleClientId: process.env.GOOGLE_CLIENT_ID || '',
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     nextAuthSecret: process.env.NEXTAUTH_SECRET || 'dev_secret',
-  }
+  },
 };

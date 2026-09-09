@@ -1,13 +1,31 @@
 import { Request, Response } from 'express';
-import { getSlackAuthUrl, exchangeSlackCodeForToken } from '../services/slack.service.js';
+import {
+  getSlackAuthUrl,
+  exchangeSlackCodeForToken,
+  disconnectSlack,
+} from '../services/slack.service.js';
 import { prisma } from '../db/prisma.js';
+
+async function resolveUserId(req: Request): Promise<string | null> {
+  const userId = req.query.userId as string | undefined;
+  const email = req.query.email as string | undefined;
+
+  if (userId) return userId;
+
+  if (email) {
+    const user = await prisma.user.findUnique({ where: { email } });
+    return user?.id ?? null;
+  }
+
+  return null;
+}
 
 export async function slackConnectHandler(req: Request, res: Response) {
   try {
     const email = req.query.email as string;
 
     if (!email) {
-      return res.status(400).send('Missing email');
+      return res.status(400).send('Missing email query parameter');
     }
 
     const user = await prisma.user.findUnique({
@@ -15,30 +33,33 @@ export async function slackConnectHandler(req: Request, res: Response) {
     });
 
     if (!user) {
-      return res.status(404).send('User not found');
+      return res.status(404).send('User not found. Please sign in with Google first.');
     }
 
     const url = getSlackAuthUrl(user.id);
-
     return res.redirect(url);
-  } catch (error: any) {
-    console.error('Slack connect error:', error);
-    return res.status(500).send(`Failed to connect Slack: ${error.message}`);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Slack connect error:', message);
+    return res.status(500).send(`Failed to connect Slack: ${message}`);
   }
 }
 
 export async function slackCallbackHandler(req: Request, res: Response) {
   try {
     const code = req.query.code as string;
-    const stateUserId = (req.query.state as string) || 'default-user-id';
+    const stateUserId = req.query.state as string;
 
     if (!code) {
       return res.status(400).send('Missing code parameter from Slack OAuth callback');
     }
 
-    const tokenRecord = await exchangeSlackCodeForToken(code, stateUserId);
+    if (!stateUserId) {
+      return res.status(400).send('Missing state parameter (user id)');
+    }
 
-    // Redirect back to frontend dashboard with success query param
+    await exchangeSlackCodeForToken(code, stateUserId);
+
     return res.send(`
       <html>
         <head><title>Slack Connected</title></head>
@@ -48,33 +69,56 @@ export async function slackCallbackHandler(req: Request, res: Response) {
             <p>Your Slack account has been successfully linked for email rate-limit alerts.</p>
             <script>
               setTimeout(() => {
-                window.opener ? window.opener.postMessage('slack-connected', '*') : null;
+                if (window.opener) window.opener.postMessage('slack-connected', '*');
                 window.close();
-              }, 2000);
+              }, 1500);
             </script>
           </div>
         </body>
       </html>
     `);
-  } catch (error: any) {
-    console.error('Slack OAuth callback error:', error);
-    return res.status(500).send(`Failed to complete Slack OAuth: ${error.message}`);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Slack OAuth callback error:', message);
+    return res.status(500).send(`Failed to complete Slack OAuth: ${message}`);
   }
 }
 
 export async function slackStatusHandler(req: Request, res: Response) {
   try {
-    const userId = (req.query.userId as string) || 'default-user-id';
+    const userId = await resolveUserId(req);
+
+    if (!userId) {
+      return res.status(400).json({ error: 'Provide userId or email query parameter' });
+    }
+
     const token = await prisma.slackToken.findUnique({
       where: { userId },
     });
 
     return res.json({
-      connected: Boolean(token && token.accessToken),
-      authedUser: token?.authedUser || null,
-      channelId: token?.channelId || null,
+      connected: Boolean(token?.accessToken),
+      authedUser: token?.authedUser ?? null,
+      channelId: token?.channelId ?? null,
     });
-  } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ error: message });
+  }
+}
+
+export async function slackDisconnectHandler(req: Request, res: Response) {
+  try {
+    const userId = (req.body?.userId as string) || (req.query.userId as string);
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    await disconnectSlack(userId);
+    return res.json({ message: 'Slack disconnected successfully', connected: false });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ error: message });
   }
 }
