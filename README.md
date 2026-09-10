@@ -222,7 +222,7 @@ that edge case.
 
 ## 🎥 Demo Video
 
-[Link to demo video] — covers:
+[[Link to demo video](https://drive.google.com/file/d/1msq246t4-MgKLcV8-li5yzmzqAVOyuoR/view?usp=drive_link)] — covers:
 1. Scheduling emails (frontend + Postman)
 2. Dashboard: Scheduled and Sent tabs
 3. Restart scenario: stop → restart → future email still sends correctly
