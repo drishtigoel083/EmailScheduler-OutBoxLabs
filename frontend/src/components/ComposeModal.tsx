@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   Paperclip,
   Clock,
+  Calendar,
   Upload,
   AlertCircle,
   CheckCircle,
@@ -33,6 +34,46 @@ interface ComposeModalProps {
   userId?: string;
 }
 
+// ── Quick-select preset helpers ─────────────────────────────────────
+interface SchedulePreset {
+  label: string;
+  getDate: () => Date;
+}
+
+function getTomorrowAt(hour: number, minute = 0): Date {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(hour, minute, 0, 0);
+  return d;
+}
+
+const SCHEDULE_PRESETS: SchedulePreset[] = [
+  { label: 'Tomorrow', getDate: () => getTomorrowAt(9, 0) },
+  { label: 'Tomorrow, 10:00 AM', getDate: () => getTomorrowAt(10, 0) },
+  { label: 'Tomorrow, 11:00 AM', getDate: () => getTomorrowAt(11, 0) },
+  { label: 'Tomorrow, 3:00 PM', getDate: () => getTomorrowAt(15, 0) },
+];
+
+function formatPickerDisplay(date: Date | null): string {
+  if (!date) return '';
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+// Format a Date as the value a native <input type="datetime-local"> expects
+function toDatetimeLocalValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
 export const ComposeModal: React.FC<ComposeModalProps> = ({
   isOpen,
   onClose,
@@ -43,7 +84,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
 }) => {
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
-  const [scheduledAt, setScheduledAt] = useState('');
+  const [scheduledAt, setScheduledAt] = useState(''); // datetime-local string, e.g. "2026-09-10T15:00"
   const [delayMs, setDelayMs] = useState(1000);
   const [hourlyLimit, setHourlyLimit] = useState(50);
 
@@ -71,9 +112,41 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [showSchedulePicker, setShowSchedulePicker] = useState(false);
 
+  // Draft value inside the picker — only committed to `scheduledAt` on "Done"
+  const [draftScheduledAt, setDraftScheduledAt] = useState('');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const nativeDateInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
+
+  const openSchedulePicker = () => {
+    setDraftScheduledAt(scheduledAt);
+    setShowSchedulePicker(true);
+  };
+
+  const closeSchedulePickerWithoutSaving = () => {
+    setShowSchedulePicker(false);
+  };
+
+  const confirmSchedulePicker = () => {
+    setScheduledAt(draftScheduledAt);
+    setShowSchedulePicker(false);
+  };
+
+  const selectPreset = (preset: SchedulePreset) => {
+    setDraftScheduledAt(toDatetimeLocalValue(preset.getDate()));
+  };
+
+  const openNativeDatePicker = () => {
+    // showPicker() is supported in modern Chromium/Edge; falls back to focus() elsewhere
+    const el = nativeDateInputRef.current as any;
+    if (el?.showPicker) {
+      el.showPicker();
+    } else {
+      el?.focus();
+    }
+  };
 
   const addRecipients = (value: string) => {
     const emails = value
@@ -247,6 +320,8 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
     }
   };
 
+  const draftDisplayDate = draftScheduledAt ? new Date(draftScheduledAt) : null;
+
   return (
     <div className="fixed inset-0 z-50 bg-white overflow-y-auto">
       {/* Header */}
@@ -277,36 +352,78 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
             <button
               type="button"
               onClick={() =>
-                setShowSchedulePicker(!showSchedulePicker)
+                showSchedulePicker
+                  ? closeSchedulePickerWithoutSaving()
+                  : openSchedulePicker()
               }
               className="p-2 text-text-secondary hover:text-text-primary transition-colors"
             >
               <Clock className="w-5 h-5" />
             </button>
 
+            {/* ── Redesigned "Send Later" schedule picker ── */}
             {showSchedulePicker && (
-              <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-border rounded-xl shadow-modal p-4 z-20">
-                <label className="block text-xs font-medium text-text-secondary mb-2">
-                  Schedule for later
-                </label>
+              <div className="absolute right-0 top-full mt-2 w-80 bg-white border border-border rounded-xl shadow-modal p-4 z-20">
+                <p className="text-sm font-semibold text-text-primary mb-3">
+                  Send Later
+                </p>
+
+                {/* Date & time field — click opens native picker */}
+                <button
+                  type="button"
+                  onClick={openNativeDatePicker}
+                  className="w-full flex items-center justify-between px-3 py-2.5 bg-surface-input rounded-lg text-sm text-left focus:outline-none focus:ring-2 focus:ring-brand/20 mb-3"
+                >
+                  <span
+                    className={
+                      draftDisplayDate
+                        ? 'text-text-primary'
+                        : 'text-text-muted'
+                    }
+                  >
+                    {draftDisplayDate
+                      ? formatPickerDisplay(draftDisplayDate)
+                      : 'Pick date & time'}
+                  </span>
+                  <Calendar className="w-4 h-4 text-text-secondary shrink-0" />
+                </button>
+
+                {/* Hidden native input — provides the real calendar/time UI */}
                 <input
+                  ref={nativeDateInputRef}
                   type="datetime-local"
-                  value={scheduledAt}
-                  onChange={(e) => setScheduledAt(e.target.value)}
-                  className="w-full px-3 py-2 bg-surface-input rounded-lg text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-brand/20"
+                  value={draftScheduledAt}
+                  onChange={(e) => setDraftScheduledAt(e.target.value)}
+                  className="sr-only"
+                  tabIndex={-1}
                 />
-                <div className="flex justify-end gap-2 mt-4">
+
+                {/* Quick-select presets */}
+                <div className="space-y-0.5 mb-3">
+                  {SCHEDULE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => selectPreset(preset)}
+                      className="w-full text-left px-3 py-2 rounded-lg text-sm text-text-primary hover:bg-surface-input transition-colors"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-1 border-t border-border">
                   <button
                     type="button"
-                    onClick={() => setShowSchedulePicker(false)}
-                    className="px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary"
+                    onClick={closeSchedulePickerWithoutSaving}
+                    className="px-4 py-1.5 text-sm text-text-secondary hover:text-text-primary mt-3"
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
-                    onClick={() => setShowSchedulePicker(false)}
-                    className="px-4 py-1.5 text-sm border border-brand text-brand rounded-lg hover:bg-brand-light"
+                    onClick={confirmSchedulePicker}
+                    className="px-4 py-1.5 text-sm border border-brand text-brand rounded-lg hover:bg-brand-light mt-3"
                   >
                     Done
                   </button>
@@ -408,11 +525,6 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
                 className="flex-1 min-w-[180px] px-0 py-2 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
               />
             </div>
-
-            {/* <p className="text-xs text-text-muted">
-              Press Enter or comma after each email to add multiple
-              recipients
-            </p> */}
           </div>
 
           <div>

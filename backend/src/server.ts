@@ -53,13 +53,18 @@ async function main() {
     startEmailWorker();
 
     // 4. Start HTTP Server
-    app.listen(config.port, () => {
-      console.log(`\n======================================================`);
-      console.log(`🚀 Backend service listening on port ${config.port}`);
-      console.log(`📊 Health Check: http://localhost:${config.port}/api/health`);
-      console.log(`📈 Bull Board Live Dashboard: http://localhost:${config.port}/admin/queues`);
-      console.log(`======================================================\n`);
-    });
+  app.listen(config.port, () => {
+  const baseUrl =
+    config.nodeEnv === 'production'
+      ? 'https://emailscheduler-outboxlabs.onrender.com'
+      : `http://localhost:${config.port}`;
+
+  console.log(`\n======================================================`);
+  console.log(`🚀 Backend service listening on port ${config.port}`);
+  console.log(`📊 Health Check: ${baseUrl}/api/health`);
+  console.log(`📈 Bull Board Live Dashboard: ${baseUrl}/admin/queues`);
+  console.log(`======================================================\n`);
+});
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);

@@ -54,7 +54,11 @@ export interface SendEmailResult {
 }
 
 export async function sendEmailViaEthereal(payload: SendEmailPayload): Promise<SendEmailResult> {
+
   const transporter = await getEmailTransporter();
+
+  await transporter.verify();
+  console.log('✅ SMTP connection verified');
   
   const info = await transporter.sendMail({
     from: payload.from,
